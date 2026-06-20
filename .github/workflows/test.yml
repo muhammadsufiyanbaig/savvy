@@ -1,0 +1,140 @@
+name: Test
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+concurrency:
+  group: test-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ── Backend: run each service in parallel via matrix ────────────────────────
+  test-backend:
+    name: Test ${{ matrix.service }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - service: api-gateway
+            python: "3.11"
+          - service: user-service
+            python: "3.11"
+          - service: finance-service
+            python: "3.11"
+          - service: bank-service
+            python: "3.11"
+          - service: statement-analysis-service
+            python: "3.11"
+          - service: ai-recommendation-service
+            python: "3.11"
+          - service: notification-service
+            python: "3.11"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+          cache-dependency-path: microservices/${{ matrix.service }}/requirements.txt
+
+      - name: Install dependencies
+        run: |
+          cd microservices/${{ matrix.service }}
+          pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run tests
+        run: |
+          cd microservices/${{ matrix.service }}
+          pytest tests/ -v --tb=short -q --no-header
+        env:
+          # Auth
+          SECRET_KEY: ci-only-secret-key-not-used-in-prod
+          ALGORITHM: HS256
+          # Database — SQLite in-memory (set in conftest.py, this is a fallback)
+          DATABASE_URL: sqlite:///./test_ci.db
+          # Redis — mocked in conftest, URL needed to pass config validation
+          REDIS_URL: redis://localhost:6379/0
+          # Kafka — mocked in conftest, needed to pass config validation
+          KAFKA_BOOTSTRAP_SERVERS: localhost:9092
+          KAFKA_TOPIC_PREFIX: financial_
+          KAFKA_GROUP_ID: ci-test-group
+          # AI keys — mocked in conftest, dummy values pass config validation
+          ANTHROPIC_API_KEY: sk-ant-ci-dummy-key
+          OPENAI_API_KEY: sk-ci-dummy-key
+          # AWS — mocked in conftest
+          AWS_ACCESS_KEY_ID: ci-dummy-key
+          AWS_SECRET_ACCESS_KEY: ci-dummy-secret
+          AWS_REGION: us-east-1
+          AWS_S3_BUCKET: ci-dummy-bucket
+          S3_BUCKET_NAME: ci-dummy-bucket
+          # ChromaDB — mocked in conftest
+          CHROMA_HOST: localhost
+          CHROMA_PORT: "8000"
+          # Service URLs (for api-gateway proxy routing)
+          USER_SERVICE_URL: http://localhost:8001
+          FINANCE_SERVICE_URL: http://localhost:8002
+          BANK_SERVICE_URL: http://localhost:8003
+          STATEMENT_SERVICE_URL: http://localhost:8004
+          AI_SERVICE_URL: http://localhost:8005
+          NOTIFICATION_SERVICE_URL: http://localhost:8006
+          # Notification
+          SMTP_HOST: ""
+          SMTP_PORT: "587"
+          SMTP_USERNAME: ""
+          SMTP_PASSWORD: ""
+          ONESIGNAL_APP_ID: ""
+          ONESIGNAL_API_KEY: ""
+
+  # ── Frontend: lint + typecheck + build ──────────────────────────────────────
+  test-frontend:
+    name: Test frontend
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+        working-directory: frontend
+
+      - name: Lint
+        run: npm run lint
+        working-directory: frontend
+
+      - name: Type check
+        run: npx tsc --noEmit
+        working-directory: frontend
+
+      - name: Build
+        run: npm run build
+        working-directory: frontend
+        env:
+          NEXT_PUBLIC_API_URL: http://localhost:8000
+
+  # ── Summary gate: both backend + frontend must pass ─────────────────────────
+  all-tests-pass:
+    name: All tests passed
+    needs: [test-backend, test-frontend]
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Check results
+        run: |
+          if [[ "${{ needs.test-backend.result }}" != "success" || "${{ needs.test-frontend.result }}" != "success" ]]; then
+            echo "One or more test jobs failed"
+            exit 1
+          fi
+          echo "All tests passed"

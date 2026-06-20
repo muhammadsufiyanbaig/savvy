@@ -1,0 +1,75 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: user-service
+  namespace: savvy
+  labels:
+    app: user-service
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: user-service
+  template:
+    metadata:
+      labels:
+        app: user-service
+    spec:
+      initContainers:
+      - name: migrate
+        image: ghcr.io/YOUR_ORG/savvy-user-service:latest
+        command: ["alembic", "upgrade", "head"]
+        env:
+        - name: DATABASE_URL
+          valueFrom:
+            secretKeyRef:
+              name: savvy-secrets
+              key: DATABASE_URL_USER
+      containers:
+      - name: user-service
+        image: ghcr.io/YOUR_ORG/savvy-user-service:latest
+        ports:
+        - containerPort: 8001
+        env:
+        - name: DATABASE_URL
+          valueFrom:
+            secretKeyRef:
+              name: savvy-secrets
+              key: DATABASE_URL_USER
+        - name: SECRET_KEY
+          valueFrom:
+            secretKeyRef:
+              name: savvy-secrets
+              key: SECRET_KEY
+        - name: REDIS_BASE_URL
+          valueFrom:
+            secretKeyRef:
+              name: savvy-secrets
+              key: REDIS_BASE_URL
+        - name: REDIS_URL
+          value: "$(REDIS_BASE_URL)/0"
+        - name: KAFKA_BOOTSTRAP_SERVERS
+          value: "kafka:9092"
+        - name: ENVIRONMENT
+          value: "production"
+        - name: ALLOWED_ORIGINS
+          value: '["https://app.savvy.com","https://savvy.com"]'
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "256Mi"
+            cpu: "300m"
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8001
+          initialDelaySeconds: 10
+          periodSeconds: 5
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8001
+          initialDelaySeconds: 30
+          periodSeconds: 15

@@ -1,0 +1,96 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: notification-service
+  namespace: savvy
+  labels:
+    app: notification-service
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: notification-service
+  template:
+    metadata:
+      labels:
+        app: notification-service
+    spec:
+      initContainers:
+      - name: migrate
+        image: ghcr.io/YOUR_ORG/savvy-notification-service:latest
+        command: ["alembic", "upgrade", "head"]
+        env:
+        - name: DATABASE_URL
+          valueFrom:
+            secretKeyRef:
+              name: savvy-secrets
+              key: DATABASE_URL_NOTIFICATION
+      containers:
+      - name: notification-service
+        image: ghcr.io/YOUR_ORG/savvy-notification-service:latest
+        ports:
+        - containerPort: 8006
+        env:
+        - name: DATABASE_URL
+          valueFrom:
+            secretKeyRef:
+              name: savvy-secrets
+              key: DATABASE_URL_NOTIFICATION
+        - name: SECRET_KEY
+          valueFrom:
+            secretKeyRef:
+              name: savvy-secrets
+              key: SECRET_KEY
+        - name: REDIS_BASE_URL
+          valueFrom:
+            secretKeyRef:
+              name: savvy-secrets
+              key: REDIS_BASE_URL
+        - name: REDIS_URL
+          value: "$(REDIS_BASE_URL)/3"
+        - name: KAFKA_BOOTSTRAP_SERVERS
+          value: "kafka:9092"
+        - name: SMTP_HOST
+          valueFrom:
+            secretKeyRef:
+              name: savvy-secrets
+              key: SMTP_HOST
+        - name: SMTP_USERNAME
+          valueFrom:
+            secretKeyRef:
+              name: savvy-secrets
+              key: SMTP_USERNAME
+        - name: SMTP_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: savvy-secrets
+              key: SMTP_PASSWORD
+        - name: ONESIGNAL_APP_ID
+          valueFrom:
+            secretKeyRef:
+              name: savvy-secrets
+              key: ONESIGNAL_APP_ID
+        - name: ONESIGNAL_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: savvy-secrets
+              key: ONESIGNAL_API_KEY
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "256Mi"
+            cpu: "300m"
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8006
+          initialDelaySeconds: 10
+          periodSeconds: 5
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8006
+          initialDelaySeconds: 30
+          periodSeconds: 15

@@ -1,0 +1,154 @@
+name: Deploy
+
+# Triggers after Build & Push completes successfully on main
+on:
+  workflow_run:
+    workflows: ["Build & Push"]
+    types: [completed]
+    branches: [main]
+  # Also allow manual deploy with optional SHA override
+  workflow_dispatch:
+    inputs:
+      image_sha:
+        description: "Image SHA to deploy (default: latest)"
+        required: false
+        default: ""
+
+env:
+  AWS_REGION: us-east-1
+  EKS_CLUSTER: savvy-cluster
+  K8S_NAMESPACE: savvy
+  ORG: ${{ github.repository_owner }}
+
+jobs:
+  deploy:
+    name: Deploy to EKS
+    runs-on: ubuntu-latest
+    # Only run if the triggering workflow succeeded (or if manually triggered)
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      github.event.workflow_run.conclusion == 'success'
+    environment: production
+    concurrency:
+      group: deploy-production
+      cancel-in-progress: false   # never cancel a running deploy
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # ── Resolve image SHA ────────────────────────────────────────────────────
+      - name: Resolve image SHA
+        id: sha
+        run: |
+          if [[ -n "${{ github.event.inputs.image_sha }}" ]]; then
+            echo "sha=${{ github.event.inputs.image_sha }}" >> $GITHUB_OUTPUT
+          elif [[ -n "${{ github.event.workflow_run.head_sha }}" ]]; then
+            echo "sha=${{ github.event.workflow_run.head_sha }}" >> $GITHUB_OUTPUT
+          else
+            echo "sha=${{ github.sha }}" >> $GITHUB_OUTPUT
+          fi
+
+      # ── AWS + kubectl setup ──────────────────────────────────────────────────
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Update kubeconfig
+        run: |
+          aws eks update-kubeconfig \
+            --name ${{ env.EKS_CLUSTER }} \
+            --region ${{ env.AWS_REGION }}
+
+      # ── Verify cluster connectivity ──────────────────────────────────────────
+      - name: Verify cluster connection
+        run: |
+          kubectl get nodes
+          kubectl get namespace ${{ env.K8S_NAMESPACE }} || \
+            kubectl create namespace ${{ env.K8S_NAMESPACE }}
+
+      # ── Update image tags for all services ───────────────────────────────────
+      - name: Deploy backend services
+        run: |
+          SHA="${{ steps.sha.outputs.sha }}"
+          SERVICES=(
+            "api-gateway"
+            "user-service"
+            "finance-service"
+            "bank-service"
+            "statement-analysis-service"
+            "ai-recommendation-service"
+            "notification-service"
+          )
+          for svc in "${SERVICES[@]}"; do
+            echo "Updating $svc → ghcr.io/${{ env.ORG }}/savvy-${svc}:${SHA}"
+            kubectl set image deployment/${svc} \
+              ${svc}=ghcr.io/${{ env.ORG }}/savvy-${svc}:${SHA} \
+              -n ${{ env.K8S_NAMESPACE }} \
+              --record 2>/dev/null || true
+          done
+
+      - name: Deploy frontend
+        run: |
+          SHA="${{ steps.sha.outputs.sha }}"
+          echo "Updating frontend → ghcr.io/${{ env.ORG }}/savvy-frontend:${SHA}"
+          kubectl set image deployment/frontend \
+            frontend=ghcr.io/${{ env.ORG }}/savvy-frontend:${SHA} \
+            -n ${{ env.K8S_NAMESPACE }} \
+            --record 2>/dev/null || true
+
+      # ── Wait for rollouts ────────────────────────────────────────────────────
+      - name: Wait for rollouts to complete
+        timeout-minutes: 10
+        run: |
+          SERVICES=(
+            api-gateway
+            user-service
+            finance-service
+            bank-service
+            statement-analysis-service
+            ai-recommendation-service
+            notification-service
+            frontend
+          )
+          FAILED=()
+          for svc in "${SERVICES[@]}"; do
+            echo "Waiting for $svc..."
+            if ! kubectl rollout status deployment/${svc} \
+                -n ${{ env.K8S_NAMESPACE }} \
+                --timeout=5m; then
+              echo "FAILED: $svc"
+              FAILED+=("$svc")
+            fi
+          done
+
+          if [[ ${#FAILED[@]} -gt 0 ]]; then
+            echo "Rollout failed for: ${FAILED[*]}"
+            echo "Fetching pod events for failed services..."
+            for svc in "${FAILED[@]}"; do
+              echo "=== $svc pods ==="
+              kubectl get pods -n ${{ env.K8S_NAMESPACE }} -l app=${svc}
+              kubectl describe pods -n ${{ env.K8S_NAMESPACE }} -l app=${svc} | tail -20
+            done
+            exit 1
+          fi
+
+      # ── Post-deploy verification ─────────────────────────────────────────────
+      - name: Verify deployment
+        run: |
+          echo "=== Pod status ==="
+          kubectl get pods -n ${{ env.K8S_NAMESPACE }} -o wide
+          echo ""
+          echo "=== Services ==="
+          kubectl get services -n ${{ env.K8S_NAMESPACE }}
+          echo ""
+          echo "=== Ingress ==="
+          kubectl get ingress -n ${{ env.K8S_NAMESPACE }}
+
+      - name: Deployment summary
+        if: success()
+        run: |
+          echo "Deployed SHA ${{ steps.sha.outputs.sha }} to production"
+          echo "All 8 services are running"

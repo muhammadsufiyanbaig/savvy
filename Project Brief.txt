@@ -1,0 +1,20 @@
+Hello Claude, I wanna create a financial management system or agent. In this system, we can do the our monthly fixed expenditures and also plans our expenditures for upcoming events like cousins' weddings, or iftar party in ramadhan or etc and also plan my savings, list my bank account and with their balance and purposes and also if I upload my bank accounts statements so it could analyse that and categories my also expenditures (all expenses must have categories also) then it recommend me some financial advises or where should I invest and also or how can I grow my money based on my city or country by using AI models and give me the recommendations by latest updates and also it also recommend me how many miscellaneous transactions I could do monthly or daily or weekly and also it recommend me what should be my daily expenditures based on my monthly income and also if I spend more so I must spend less on the upcoming days or etc (you can also recommend me some more features for that) and I could also add my cash savings and also it could calculate my zakat, and my savings for qurbani.
+
+
+And I wanna use the Modern Technologies on it:
+Frontend: Next.js
+State Management: Zustand
+Frontend Data Validation: Zod
+Backend: FastAPI, 
+Database: PostgresSQL, Vector Database (Chroma DB)
+Containerization: Docker
+Container Orchestration: Kubernetes and Kafka
+CI/CD Piplines: GitHub Actions
+Deployment: AWS lambda or AWS EC2
+Verification: Cloudflare
+Document Storage: AWS S3
+Caching: Redis
+AI technologies:
+LangGraph, MCP, Reg Application, Embedding
+Use: 
+Speckit plus (available on panaversity GitHub repos)

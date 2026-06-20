@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: bank-service
+  namespace: savvy
+spec:
+  selector:
+    app: bank-service
+  ports:
+  - port: 8003
+    targetPort: 8003
+    name: http
+  type: ClusterIP

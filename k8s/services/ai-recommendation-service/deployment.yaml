@@ -1,0 +1,65 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ai-recommendation-service
+  namespace: savvy
+  labels:
+    app: ai-recommendation-service
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ai-recommendation-service
+  template:
+    metadata:
+      labels:
+        app: ai-recommendation-service
+    spec:
+      containers:
+      - name: ai-recommendation-service
+        image: ghcr.io/YOUR_ORG/savvy-ai-recommendation-service:latest
+        ports:
+        - containerPort: 8005
+        env:
+        - name: SECRET_KEY
+          valueFrom:
+            secretKeyRef:
+              name: savvy-secrets
+              key: SECRET_KEY
+        - name: ANTHROPIC_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: savvy-secrets
+              key: ANTHROPIC_API_KEY
+        - name: REDIS_BASE_URL
+          valueFrom:
+            secretKeyRef:
+              name: savvy-secrets
+              key: REDIS_BASE_URL
+        - name: REDIS_URL
+          value: "$(REDIS_BASE_URL)/6"
+        - name: CHROMA_HOST
+          value: "chromadb"
+        - name: CHROMA_PORT
+          value: "8000"
+        - name: KAFKA_BOOTSTRAP_SERVERS
+          value: "kafka:9092"
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "200m"
+          limits:
+            memory: "1Gi"
+            cpu: "1000m"
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8005
+          initialDelaySeconds: 15
+          periodSeconds: 10
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8005
+          initialDelaySeconds: 30
+          periodSeconds: 15

@@ -1,0 +1,82 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: statement-analysis-service
+  namespace: savvy
+  labels:
+    app: statement-analysis-service
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: statement-analysis-service
+  template:
+    metadata:
+      labels:
+        app: statement-analysis-service
+    spec:
+      containers:
+      - name: statement-analysis-service
+        image: ghcr.io/YOUR_ORG/savvy-statement-analysis-service:latest
+        ports:
+        - containerPort: 8004
+        env:
+        - name: SECRET_KEY
+          valueFrom:
+            secretKeyRef:
+              name: savvy-secrets
+              key: SECRET_KEY
+        - name: ANTHROPIC_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: savvy-secrets
+              key: ANTHROPIC_API_KEY
+        - name: AWS_ACCESS_KEY_ID
+          valueFrom:
+            secretKeyRef:
+              name: savvy-secrets
+              key: AWS_ACCESS_KEY_ID
+        - name: AWS_SECRET_ACCESS_KEY
+          valueFrom:
+            secretKeyRef:
+              name: savvy-secrets
+              key: AWS_SECRET_ACCESS_KEY
+        - name: AWS_S3_BUCKET
+          valueFrom:
+            secretKeyRef:
+              name: savvy-secrets
+              key: AWS_S3_BUCKET
+        - name: AWS_REGION
+          value: "us-east-1"
+        - name: REDIS_BASE_URL
+          valueFrom:
+            secretKeyRef:
+              name: savvy-secrets
+              key: REDIS_BASE_URL
+        - name: REDIS_URL
+          value: "$(REDIS_BASE_URL)/5"
+        - name: CHROMA_HOST
+          value: "chromadb"
+        - name: CHROMA_PORT
+          value: "8000"
+        - name: KAFKA_BOOTSTRAP_SERVERS
+          value: "kafka:9092"
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "200m"
+          limits:
+            memory: "1Gi"
+            cpu: "1000m"
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8004
+          initialDelaySeconds: 15
+          periodSeconds: 10
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8004
+          initialDelaySeconds: 30
+          periodSeconds: 15

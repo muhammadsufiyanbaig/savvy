@@ -1,0 +1,47 @@
+# ServiceMonitor — tells Prometheus Operator to scrape /metrics from all savvy services.
+# Prereq: kube-prometheus-stack installed (helm install kube-prometheus-stack ...)
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: savvy-services
+  namespace: savvy
+  labels:
+    release: kube-prometheus-stack
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/part-of: savvy
+  namespaceSelector:
+    matchNames:
+    - savvy
+  endpoints:
+  - port: http
+    path: /metrics
+    interval: 30s
+    scrapeTimeout: 10s
+---
+# PodMonitor — scrapes pods directly (covers services without a matching label).
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: savvy-pods
+  namespace: savvy
+  labels:
+    release: kube-prometheus-stack
+spec:
+  selector:
+    matchExpressions:
+    - key: app
+      operator: In
+      values:
+      - api-gateway
+      - user-service
+      - finance-service
+      - bank-service
+      - statement-analysis-service
+      - ai-recommendation-service
+      - notification-service
+  podMetricsEndpoints:
+  - port: http
+    path: /metrics
+    interval: 30s

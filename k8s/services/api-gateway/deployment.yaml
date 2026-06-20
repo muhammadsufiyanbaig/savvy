@@ -1,0 +1,70 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api-gateway
+  namespace: savvy
+  labels:
+    app: api-gateway
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: api-gateway
+  template:
+    metadata:
+      labels:
+        app: api-gateway
+    spec:
+      containers:
+      - name: api-gateway
+        image: ghcr.io/YOUR_ORG/savvy-api-gateway:latest
+        ports:
+        - containerPort: 8000
+        env:
+        - name: SECRET_KEY
+          valueFrom:
+            secretKeyRef:
+              name: savvy-secrets
+              key: SECRET_KEY
+        - name: REDIS_BASE_URL
+          valueFrom:
+            secretKeyRef:
+              name: savvy-secrets
+              key: REDIS_BASE_URL
+        - name: REDIS_URL
+          value: "$(REDIS_BASE_URL)/4"
+        - name: USER_SERVICE_URL
+          value: "http://user-service:8001"
+        - name: FINANCE_SERVICE_URL
+          value: "http://finance-service:8002"
+        - name: BANK_SERVICE_URL
+          value: "http://bank-service:8003"
+        - name: STATEMENT_SERVICE_URL
+          value: "http://statement-analysis-service:8004"
+        - name: AI_SERVICE_URL
+          value: "http://ai-recommendation-service:8005"
+        - name: NOTIFICATION_SERVICE_URL
+          value: "http://notification-service:8006"
+        - name: ENVIRONMENT
+          value: "production"
+        - name: ALLOWED_ORIGINS
+          value: '["https://app.savvy.com","https://savvy.com"]'
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "256Mi"
+            cpu: "300m"
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 10
+          periodSeconds: 5
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 30
+          periodSeconds: 15

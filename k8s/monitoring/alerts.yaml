@@ -1,0 +1,91 @@
+# PrometheusRule — alert rules for Savvy services.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: savvy-alerts
+  namespace: savvy
+  labels:
+    release: kube-prometheus-stack
+spec:
+  groups:
+  - name: savvy.availability
+    interval: 30s
+    rules:
+    - alert: ServiceDown
+      expr: up{namespace="savvy"} == 0
+      for: 2m
+      labels:
+        severity: critical
+      annotations:
+        summary: "Service {{ $labels.job }} is down"
+        description: "{{ $labels.job }} in namespace savvy has been down for 2+ minutes."
+
+    - alert: HighErrorRate
+      expr: |
+        rate(http_requests_total{namespace="savvy", status=~"5.."}[5m])
+        /
+        rate(http_requests_total{namespace="savvy"}[5m]) > 0.05
+      for: 5m
+      labels:
+        severity: critical
+      annotations:
+        summary: "High 5xx error rate on {{ $labels.job }}"
+        description: "Error rate > 5% for 5+ minutes on {{ $labels.job }}."
+
+    - alert: HighLatency
+      expr: |
+        histogram_quantile(0.95,
+          rate(http_request_duration_seconds_bucket{namespace="savvy"}[5m])
+        ) > 2
+      for: 5m
+      labels:
+        severity: warning
+      annotations:
+        summary: "High latency on {{ $labels.job }}"
+        description: "p95 latency > 2s for 5+ minutes on {{ $labels.job }}."
+
+  - name: savvy.resources
+    rules:
+    - alert: PodMemoryHigh
+      expr: |
+        container_memory_usage_bytes{namespace="savvy", container!=""}
+        / container_spec_memory_limit_bytes{namespace="savvy", container!=""} > 0.85
+      for: 5m
+      labels:
+        severity: warning
+      annotations:
+        summary: "Pod {{ $labels.pod }} memory > 85%"
+        description: "Container {{ $labels.container }} using > 85% of memory limit."
+
+    - alert: PodCPUHigh
+      expr: |
+        rate(container_cpu_usage_seconds_total{namespace="savvy", container!=""}[5m])
+        / container_spec_cpu_quota{namespace="savvy", container!=""} * container_spec_cpu_period{namespace="savvy", container!=""} > 0.85
+      for: 5m
+      labels:
+        severity: warning
+      annotations:
+        summary: "Pod {{ $labels.pod }} CPU > 85%"
+        description: "Container {{ $labels.container }} using > 85% of CPU limit."
+
+    - alert: PVCAlmostFull
+      expr: |
+        kubelet_volume_stats_used_bytes{namespace="savvy"}
+        / kubelet_volume_stats_capacity_bytes{namespace="savvy"} > 0.80
+      for: 10m
+      labels:
+        severity: warning
+      annotations:
+        summary: "PVC {{ $labels.persistentvolumeclaim }} > 80% full"
+        description: "Volume usage above 80% — provision more storage soon."
+
+  - name: savvy.kafka
+    rules:
+    - alert: KafkaConsumerLag
+      expr: kafka_consumer_group_lag{namespace="savvy"} > 1000
+      for: 5m
+      labels:
+        severity: warning
+      annotations:
+        summary: "Kafka consumer lag > 1000 on {{ $labels.group }}"
+        description: "Consumer group {{ $labels.group }} falling behind on topic {{ $labels.topic }}."

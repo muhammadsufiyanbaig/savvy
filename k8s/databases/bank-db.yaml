@@ -1,0 +1,70 @@
+# bank-db — staging only. Production: use RDS (set DATABASE_URL_BANK in secret).
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: bank-db
+  namespace: savvy
+  labels:
+    app: bank-db
+spec:
+  serviceName: bank-db
+  replicas: 1
+  selector:
+    matchLabels:
+      app: bank-db
+  template:
+    metadata:
+      labels:
+        app: bank-db
+    spec:
+      containers:
+      - name: postgres
+        image: postgres:15-alpine
+        ports:
+        - containerPort: 5432
+        env:
+        - name: POSTGRES_DB
+          value: bank_db
+        - name: POSTGRES_USER
+          value: savvy
+        - name: POSTGRES_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: savvy-secrets
+              key: SECRET_KEY
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "300m"
+        readinessProbe:
+          exec:
+            command: ["pg_isready", "-U", "savvy", "-d", "bank_db"]
+          initialDelaySeconds: 10
+          periodSeconds: 5
+        volumeMounts:
+        - name: pgdata
+          mountPath: /var/lib/postgresql/data
+  volumeClaimTemplates:
+  - metadata:
+      name: pgdata
+    spec:
+      accessModes: ["ReadWriteOnce"]
+      resources:
+        requests:
+          storage: 20Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: bank-db
+  namespace: savvy
+spec:
+  selector:
+    app: bank-db
+  ports:
+  - port: 5432
+    targetPort: 5432
+  clusterIP: None

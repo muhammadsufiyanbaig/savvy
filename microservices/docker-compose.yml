@@ -1,0 +1,451 @@
+version: '3.8'
+
+services:
+  # ============================================
+  # INFRASTRUCTURE SERVICES
+  # ============================================
+
+  # PostgreSQL Databases (One per service for data isolation)
+  user-db:
+    image: postgres:15-alpine
+    container_name: user-db
+    environment:
+      POSTGRES_USER: user_service
+      POSTGRES_PASSWORD: user_password
+      POSTGRES_DB: user_db
+    ports:
+      - "5433:5432"
+    volumes:
+      - user_db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U user_service -d postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks: [user-db-net]
+
+  finance-db:
+    image: postgres:15-alpine
+    container_name: finance-db
+    environment:
+      POSTGRES_USER: finance_service
+      POSTGRES_PASSWORD: finance_password
+      POSTGRES_DB: finance_db
+    ports:
+      - "5434:5432"
+    volumes:
+      - finance_db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U finance_service -d postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks: [finance-db-net]
+
+  bank-db:
+    image: postgres:15-alpine
+    container_name: bank-db
+    environment:
+      POSTGRES_USER: bank_service
+      POSTGRES_PASSWORD: bank_password
+      POSTGRES_DB: bank_db
+    ports:
+      - "5435:5432"
+    volumes:
+      - bank_db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bank_service -d postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks: [bank-db-net]
+
+  notification-db:
+    image: postgres:15-alpine
+    container_name: notification-db
+    environment:
+      POSTGRES_USER: notification_service
+      POSTGRES_PASSWORD: notification_password
+      POSTGRES_DB: notification_db
+    ports:
+      - "5436:5432"
+    volumes:
+      - notification_db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U notification_service -d postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks: [notification-db-net]
+
+  # Redis Cache (Shared across services)
+  redis:
+    image: redis:7-alpine
+    container_name: financial-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks: [internal-net]
+
+  # ChromaDB Vector Database
+  chromadb:
+    image: ghcr.io/chroma-core/chroma:latest
+    container_name: financial-chromadb
+    ports:
+      - "8100:8000"
+    volumes:
+      - chromadb_data:/chroma/chroma
+    environment:
+      - IS_PERSISTENT=TRUE
+      - ANONYMIZED_TELEMETRY=FALSE
+      - CHROMA_SERVER_AUTH_PROVIDER=token
+      - CHROMA_SERVER_AUTH_CREDENTIALS=${CHROMA_AUTH_TOKEN:-dev-chroma-token-change-in-production}
+      - CHROMA_SERVER_AUTH_TOKEN_TRANSPORT_HEADER=Authorization
+    networks: [internal-net]
+
+  # Kafka Message Broker
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.4.0
+    container_name: financial-zookeeper
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    ports:
+      - "2181:2181"
+    volumes:
+      - zookeeper_data:/var/lib/zookeeper
+    networks: [internal-net]
+
+  kafka:
+    image: confluentinc/cp-kafka:7.4.0
+    container_name: financial-kafka
+    depends_on:
+      - zookeeper
+    ports:
+      - "9092:9092"
+      - "29092:29092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:29092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+    volumes:
+      - kafka_data:/var/lib/kafka/data
+    healthcheck:
+      test: ["CMD", "kafka-broker-api-versions", "--bootstrap-server", "localhost:9092"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    networks: [internal-net]
+
+  # ============================================
+  # MICROSERVICES
+  # ============================================
+
+  # API Gateway
+  api-gateway:
+    build:
+      context: .
+      dockerfile: api-gateway/Dockerfile
+    container_name: api-gateway
+    ports:
+      - "8000:8000"
+    environment:
+      - ENVIRONMENT=${ENVIRONMENT:-development}
+      - SECRET_KEY=${SECRET_KEY}
+      - SECRET_KEY_PREVIOUS=${SECRET_KEY_PREVIOUS:-}
+      - ALGORITHM=HS256
+      - REDIS_URL=redis://redis:6379/4
+      - RATE_LIMIT_AUTH=300
+      - RATE_LIMIT_ANON=60
+      - RATE_LIMIT_WINDOW=60
+      - USER_SERVICE_URL=http://user-service:8001
+      - FINANCE_SERVICE_URL=http://finance-service:8002
+      - BANK_SERVICE_URL=http://bank-service:8003
+      - STATEMENT_SERVICE_URL=http://statement-analysis-service:8004
+      - AI_SERVICE_URL=http://ai-recommendation-service:8005
+      - NOTIFICATION_SERVICE_URL=http://notification-service:8006
+      - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-["http://localhost:3000"]}
+      - INTERNAL_SERVICE_SECRET=${INTERNAL_SERVICE_SECRET}
+    depends_on:
+      redis:
+        condition: service_healthy
+      user-service:
+        condition: service_started
+      finance-service:
+        condition: service_started
+      bank-service:
+        condition: service_started
+      notification-service:
+        condition: service_started
+    networks: [gateway-net, internal-net]
+    restart: unless-stopped
+
+  # User Service
+  user-service:
+    build:
+      context: .
+      dockerfile: user-service/Dockerfile
+    container_name: user-service
+    ports:
+      - "8001:8001"
+    environment:
+      - ENVIRONMENT=${ENVIRONMENT:-development}
+      - SECRET_KEY=${SECRET_KEY}
+      - FIELD_ENCRYPTION_KEY=${FIELD_ENCRYPTION_KEY}
+      - INTERNAL_SERVICE_SECRET=${INTERNAL_SERVICE_SECRET}
+      - ALGORITHM=HS256
+      - DATABASE_URL=postgresql://user_service:user_password@user-db:5432/user_db
+      - REDIS_URL=redis://redis:6379/0
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+      - KAFKA_TOPIC_PREFIX=financial_
+      - KAFKA_GROUP_ID=user-service-group
+    depends_on:
+      user-db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    volumes:
+      - ./user-service/app:/app/app
+      - ./shared:/app/shared
+    networks: [internal-net, user-db-net]
+    restart: unless-stopped
+
+  # Finance Service
+  finance-service:
+    build:
+      context: .
+      dockerfile: finance-service/Dockerfile
+    container_name: finance-service
+    ports:
+      - "8002:8002"
+    environment:
+      - ENVIRONMENT=${ENVIRONMENT:-development}
+      - SECRET_KEY=${SECRET_KEY}
+      - INTERNAL_SERVICE_SECRET=${INTERNAL_SERVICE_SECRET}
+      - ALGORITHM=HS256
+      - DATABASE_URL=postgresql://finance_service:finance_password@finance-db:5432/finance_db
+      - REDIS_URL=redis://redis:6379/1
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+      - KAFKA_TOPIC_PREFIX=financial_
+      - KAFKA_GROUP_ID=finance-service-group
+      - USER_SERVICE_URL=http://user-service:8001
+      - NOTIFICATION_SERVICE_URL=http://notification-service:8006
+      - AI_SERVICE_URL=http://ai-recommendation-service:8005
+    depends_on:
+      finance-db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    volumes:
+      - ./finance-service/app:/app/app
+      - ./shared:/app/shared
+    networks: [internal-net, finance-db-net]
+    restart: unless-stopped
+
+  # Bank Service
+  bank-service:
+    build:
+      context: .
+      dockerfile: bank-service/Dockerfile
+    container_name: bank-service
+    ports:
+      - "8003:8003"
+    environment:
+      - SECRET_KEY=${SECRET_KEY}
+      - INTERNAL_SERVICE_SECRET=${INTERNAL_SERVICE_SECRET}
+      - ALGORITHM=HS256
+      - DATABASE_URL=postgresql://bank_service:bank_password@bank-db:5432/bank_db
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+      - KAFKA_TOPIC_PREFIX=financial_
+      - KAFKA_GROUP_ID=bank-service-group
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+      - AWS_REGION=${AWS_REGION:-us-east-1}
+      - AWS_S3_BUCKET=${AWS_S3_BUCKET}
+      - USER_SERVICE_URL=http://user-service:8001
+    depends_on:
+      bank-db:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    volumes:
+      - ./bank-service/app:/app/app
+      - ./shared:/app/shared
+    networks: [internal-net, bank-db-net]
+    restart: unless-stopped
+
+  # Statement Analysis Service (AI/ML)
+  statement-analysis-service:
+    build:
+      context: .
+      dockerfile: statement-analysis-service/Dockerfile
+    container_name: statement-analysis-service
+    ports:
+      - "8004:8004"
+    environment:
+      - SECRET_KEY=${SECRET_KEY}
+      - INTERNAL_SERVICE_SECRET=${INTERNAL_SERVICE_SECRET}
+      - ALGORITHM=HS256
+      - REDIS_URL=redis://redis:6379/5
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+      - KAFKA_TOPIC_PREFIX=financial_
+      - KAFKA_GROUP_ID=statement-service-group
+      - CHROMA_HOST=chromadb
+      - CHROMA_PORT=8000
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+      - AWS_REGION=${AWS_REGION:-us-east-1}
+      - S3_BUCKET_NAME=${AWS_S3_BUCKET}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - AI_PROVIDER=claude
+      - AI_MODEL=claude-sonnet-4-6
+      - CHROMA_AUTH_TOKEN=${CHROMA_AUTH_TOKEN:-dev-chroma-token-change-in-production}
+    depends_on:
+      redis:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      chromadb:
+        condition: service_started
+    volumes:
+      - ./statement-analysis-service/app:/app/app
+      - ./shared:/app/shared
+    networks: [internal-net]
+    restart: unless-stopped
+
+  # AI Recommendation Service
+  ai-recommendation-service:
+    build:
+      context: .
+      dockerfile: ai-recommendation-service/Dockerfile
+    container_name: ai-recommendation-service
+    ports:
+      - "8005:8005"
+    environment:
+      - SECRET_KEY=${SECRET_KEY}
+      - INTERNAL_SERVICE_SECRET=${INTERNAL_SERVICE_SECRET}
+      - ALGORITHM=HS256
+      - REDIS_URL=redis://redis:6379/6
+      - RECOMMENDATION_CACHE_TTL=3600
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+      - KAFKA_TOPIC_PREFIX=financial_
+      - KAFKA_GROUP_ID=ai-service-group
+      - CHROMA_HOST=chromadb
+      - CHROMA_PORT=8000
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - CLAUDE_MODEL=claude-sonnet-4-6
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - CHROMA_AUTH_TOKEN=${CHROMA_AUTH_TOKEN:-dev-chroma-token-change-in-production}
+      - LANGGRAPH_ENABLED=true
+      - CONFIDENCE_THRESHOLD=0.75
+    depends_on:
+      redis:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      chromadb:
+        condition: service_started
+    volumes:
+      - ./ai-recommendation-service/app:/app/app
+      - ./shared:/app/shared
+    networks: [internal-net]
+    restart: unless-stopped
+
+  # Frontend (Next.js)
+  frontend:
+    build:
+      context: ../frontend
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: http://localhost:8000
+    container_name: savvy-frontend
+    ports:
+      - "3000:3000"
+    environment:
+      - NEXT_PUBLIC_API_URL=http://localhost:8000
+    depends_on:
+      - api-gateway
+    networks: [gateway-net]
+    restart: unless-stopped
+
+  # Notification Service
+  notification-service:
+    build:
+      context: .
+      dockerfile: notification-service/Dockerfile
+    container_name: notification-service
+    ports:
+      - "8006:8006"
+    environment:
+      - SECRET_KEY=${SECRET_KEY}
+      - INTERNAL_SERVICE_SECRET=${INTERNAL_SERVICE_SECRET}
+      - ALGORITHM=HS256
+      - DATABASE_URL=postgresql://notification_service:notification_password@notification-db:5432/notification_db
+      - REDIS_URL=redis://redis:6379/3
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+      - KAFKA_TOPIC_PREFIX=financial_
+      - KAFKA_GROUP_ID=notification-service-group
+      - SMTP_HOST=${SMTP_HOST:-}
+      - SMTP_PORT=${SMTP_PORT:-587}
+      - SMTP_USERNAME=${SMTP_USERNAME:-}
+      - SMTP_PASSWORD=${SMTP_PASSWORD:-}
+      - ONESIGNAL_APP_ID=${ONESIGNAL_APP_ID:-}
+      - ONESIGNAL_API_KEY=${ONESIGNAL_API_KEY:-}
+    depends_on:
+      notification-db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    volumes:
+      - ./notification-service/app:/app/app
+      - ./shared:/app/shared
+    networks: [internal-net, notification-db-net]
+    restart: unless-stopped
+
+volumes:
+  user_db_data:
+  finance_db_data:
+  bank_db_data:
+  notification_db_data:
+  redis_data:
+  chromadb_data:
+  zookeeper_data:
+  kafka_data:
+
+networks:
+  # frontend → api-gateway only (frontend has NO direct access to backend services)
+  gateway-net:
+    driver: bridge
+  # api-gateway ↔ all microservices ↔ redis ↔ kafka ↔ chromadb
+  internal-net:
+    driver: bridge
+  # each service gets its own DB network — no service can reach another's DB
+  user-db-net:
+    driver: bridge
+    internal: true
+  finance-db-net:
+    driver: bridge
+    internal: true
+  bank-db-net:
+    driver: bridge
+    internal: true
+  notification-db-net:
+    driver: bridge
+    internal: true

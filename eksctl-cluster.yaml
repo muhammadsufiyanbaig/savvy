@@ -1,0 +1,58 @@
+apiVersion: eksctl.io/v1alpha5
+kind: ClusterConfig
+
+metadata:
+  name: savvy-cluster
+  region: us-east-1
+  version: "1.29"
+  tags:
+    project: savvy
+    env: production
+
+iam:
+  withOIDC: true  # required for IRSA (IAM Roles for Service Accounts)
+
+managedNodeGroups:
+- name: standard-workers
+  instanceType: t3.medium
+  minSize: 2
+  maxSize: 8
+  desiredCapacity: 3
+  volumeSize: 50
+  volumeType: gp3
+  amiFamily: AmazonLinux2
+  labels:
+    role: worker
+  tags:
+    k8s.io/cluster-autoscaler/enabled: "true"
+    k8s.io/cluster-autoscaler/savvy-cluster: "owned"
+  iam:
+    attachPolicyARNs:
+    - arn:aws:iam::aws:policy/AmazonEKSWorkerNodePolicy
+    - arn:aws:iam::aws:policy/AmazonEKS_CNI_Policy
+    - arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly
+    withAddonPolicies:
+      autoScaler: true
+      albIngress: true
+      externalDNS: true
+      certManager: true
+
+addons:
+- name: vpc-cni
+  version: latest
+- name: coredns
+  version: latest
+- name: kube-proxy
+  version: latest
+- name: aws-ebs-csi-driver
+  version: latest
+  wellKnownPolicies:
+    ebsCSIController: true
+
+# VPC with private worker nodes
+vpc:
+  nat:
+    gateway: Single   # HighlyAvailable for prod HA ($$$); Single saves ~$64/mo
+  clusterEndpoints:
+    privateAccess: true
+    publicAccess: true
